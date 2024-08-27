@@ -987,11 +987,35 @@ pub struct ExpandResolver<'a, 'tcx> {
     /// Derive macros cannot modify the item themselves and have to store the markers in the global
     /// context, so they attach the markers to derive container IDs using this resolver table.
     containers_deriving_copy: FxHashSet<LocalExpnId>,
+    unused_macro_rules: FxHashMap<(LocalDefId, usize), (Ident, Span)>,
+    /// Ready or in-progress results of resolving paths inside the `#[derive(...)]` attribute
+    /// with the given `ExpnId`.
+    derive_data: FxHashMap<LocalExpnId, DeriveData>,
+    /// Some way to know that we are in a *trait* impl in `visit_assoc_item`.
+    /// FIXME: Replace with a more general AST map (together with some other fields).
+    trait_impl_items: FxHashSet<LocalDefId>,
+    /// Invocation ids of all glob delegations.
+    glob_delegation_invoc_ids: FxHashSet<LocalExpnId>,
+    /// Analogue of module `unexpanded_invocations` but in trait impls, excluding glob delegations.
+    /// Needed because glob delegations wait for all other neighboring macros to expand.
+    impl_unexpanded_invocations: FxHashMap<LocalDefId, FxHashSet<LocalExpnId>>,
+    /// Simplified analogue of module `resolutions` but in trait impls, excluding glob delegations.
+    /// Needed because glob delegations exclude explicitly defined names.
+    impl_binding_keys: FxHashMap<LocalDefId, FxHashSet<BindingKey>>,
 }
 
 impl<'a, 'tcx> ExpandResolver<'a, 'tcx> {
     pub fn new(r: Resolver<'a, 'tcx>) -> Self {
-        ExpandResolver { r, containers_deriving_copy: Default::default() }
+        ExpandResolver {
+            r,
+            containers_deriving_copy: Default::default(),
+            unused_macro_rules: Default::default(),
+            derive_data: Default::default(),
+            trait_impl_items: Default::default(),
+            glob_delegation_invoc_ids: Default::default(),
+            impl_unexpanded_invocations: Default::default(),
+            impl_binding_keys: Default::default(),
+        }
     }
 }
 
@@ -1107,7 +1131,6 @@ pub struct Resolver<'a, 'tcx> {
     local_macro_def_scopes: FxHashMap<LocalDefId, Module<'a>>,
     ast_transform_scopes: FxHashMap<LocalExpnId, Module<'a>>,
     unused_macros: FxHashMap<LocalDefId, (NodeId, Ident)>,
-    unused_macro_rules: FxHashMap<(LocalDefId, usize), (Ident, Span)>,
     proc_macro_stubs: FxHashSet<LocalDefId>,
     /// Traces collected during macro resolution and validated when it's complete.
     single_segment_macro_resolutions:
@@ -1125,9 +1148,6 @@ pub struct Resolver<'a, 'tcx> {
     macro_rules_scopes: FxHashMap<LocalDefId, MacroRulesScopeRef<'a>>,
     /// Helper attributes that are in scope for the given expansion.
     helper_attrs: FxHashMap<LocalExpnId, Vec<(Ident, NameBinding<'a>)>>,
-    /// Ready or in-progress results of resolving paths inside the `#[derive(...)]` attribute
-    /// with the given `ExpnId`.
-    derive_data: FxHashMap<LocalExpnId, DeriveData>,
 
     /// Avoid duplicated errors for "name already defined".
     name_already_seen: FxHashMap<Symbol, Span>,
@@ -1155,10 +1175,6 @@ pub struct Resolver<'a, 'tcx> {
     /// and how the `impl Trait` fragments were introduced.
     invocation_parents: FxHashMap<LocalExpnId, (LocalDefId, ImplTraitContext, bool /*in_attr*/)>,
 
-    /// Some way to know that we are in a *trait* impl in `visit_assoc_item`.
-    /// FIXME: Replace with a more general AST map (together with some other fields).
-    trait_impl_items: FxHashSet<LocalDefId>,
-
     legacy_const_generic_args: FxHashMap<DefId, Option<Vec<usize>>>,
     /// Amount of lifetime parameters for each item in the crate.
     item_generics_num_lifetimes: FxHashMap<LocalDefId, usize>,
@@ -1180,15 +1196,6 @@ pub struct Resolver<'a, 'tcx> {
     doc_link_resolutions: FxHashMap<LocalDefId, DocLinkResMap>,
     doc_link_traits_in_scope: FxHashMap<LocalDefId, Vec<DefId>>,
     all_macro_rules: FxHashMap<Symbol, Res>,
-
-    /// Invocation ids of all glob delegations.
-    glob_delegation_invoc_ids: FxHashSet<LocalExpnId>,
-    /// Analogue of module `unexpanded_invocations` but in trait impls, excluding glob delegations.
-    /// Needed because glob delegations wait for all other neighboring macros to expand.
-    impl_unexpanded_invocations: FxHashMap<LocalDefId, FxHashSet<LocalExpnId>>,
-    /// Simplified analogue of module `resolutions` but in trait impls, excluding glob delegations.
-    /// Needed because glob delegations exclude explicitly defined names.
-    impl_binding_keys: FxHashMap<LocalDefId, FxHashSet<BindingKey>>,
 
     /// This is the `Span` where an `extern crate foo;` suggestion would be inserted, if `foo`
     /// could be a crate that wasn't imported. For diagnostics use only.
@@ -1502,14 +1509,12 @@ impl<'a, 'tcx> Resolver<'a, 'tcx> {
             output_macro_rules_scopes: Default::default(),
             macro_rules_scopes: Default::default(),
             helper_attrs: Default::default(),
-            derive_data: Default::default(),
             local_macro_def_scopes: FxHashMap::default(),
             name_already_seen: FxHashMap::default(),
             potentially_unused_imports: Vec::new(),
             potentially_unnecessary_qualifications: Default::default(),
             struct_constructors: Default::default(),
             unused_macros: Default::default(),
-            unused_macro_rules: Default::default(),
             proc_macro_stubs: Default::default(),
             single_segment_macro_resolutions: Default::default(),
             multi_segment_macro_resolutions: Default::default(),
@@ -1520,7 +1525,6 @@ impl<'a, 'tcx> Resolver<'a, 'tcx> {
             def_id_to_node_id,
             placeholder_field_indices: Default::default(),
             invocation_parents,
-            trait_impl_items: Default::default(),
             legacy_const_generic_args: Default::default(),
             item_generics_num_lifetimes: Default::default(),
             main_def: Default::default(),
@@ -1534,9 +1538,6 @@ impl<'a, 'tcx> Resolver<'a, 'tcx> {
             doc_link_traits_in_scope: Default::default(),
             all_macro_rules: Default::default(),
             delegation_fn_sigs: Default::default(),
-            glob_delegation_invoc_ids: Default::default(),
-            impl_unexpanded_invocations: Default::default(),
-            impl_binding_keys: Default::default(),
             current_crate_outer_attr_insert_span,
         };
 

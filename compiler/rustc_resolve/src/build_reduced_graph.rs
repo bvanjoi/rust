@@ -905,7 +905,7 @@ impl<'a, 'b, 'tcx> BuildReducedGraphVisitor<'a, 'b, 'tcx> {
 
             // These items do not add names to modules.
             ItemKind::Impl(box Impl { of_trait: Some(..), .. }) => {
-                self.r.r.trait_impl_items.insert(local_def_id);
+                self.r.trait_impl_items.insert(local_def_id);
             }
             ItemKind::Impl { .. } | ItemKind::ForeignMod(..) | ItemKind::GlobalAsm(..) => {}
 
@@ -1225,7 +1225,7 @@ impl<'a, 'b, 'tcx> BuildReducedGraphVisitor<'a, 'b, 'tcx> {
         if !ident.as_str().starts_with('_') {
             self.r.r.unused_macros.insert(def_id, (node_id, ident));
             for (rule_i, rule_span) in &self.r.r.macro_map[&def_id.to_def_id()].rule_spans {
-                self.r.r.unused_macro_rules.insert((def_id, *rule_i), (ident, *rule_span));
+                self.r.unused_macro_rules.insert((def_id, *rule_i), (ident, *rule_span));
             }
         }
     }
@@ -1401,9 +1401,8 @@ impl<'a, 'b, 'tcx> Visitor<'b> for BuildReducedGraphVisitor<'a, 'b, 'tcx> {
                 }
                 AssocCtxt::Impl => {
                     let invoc_id = item.id.placeholder_to_expn_id();
-                    if !self.r.r.glob_delegation_invoc_ids.contains(&invoc_id) {
+                    if !self.r.glob_delegation_invoc_ids.contains(&invoc_id) {
                         self.r
-                            .r
                             .impl_unexpanded_invocations
                             .entry(self.r.invocation_parent(invoc_id))
                             .or_default()
@@ -1422,7 +1421,7 @@ impl<'a, 'b, 'tcx> Visitor<'b> for BuildReducedGraphVisitor<'a, 'b, 'tcx> {
 
         if !(ctxt == AssocCtxt::Impl
             && matches!(item.vis.kind, ast::VisibilityKind::Inherited)
-            && self.r.r.trait_impl_items.contains(&self.r.r.tcx.local_parent(local_def_id)))
+            && self.r.trait_impl_items.contains(&self.r.r.tcx.local_parent(local_def_id)))
         {
             // Trait impl item visibility is inherited from its trait when not specified
             // explicitly. In that case we cannot determine it here in early resolve,
@@ -1444,7 +1443,7 @@ impl<'a, 'b, 'tcx> Visitor<'b> for BuildReducedGraphVisitor<'a, 'b, 'tcx> {
         } else if !matches!(&item.kind, AssocItemKind::Delegation(deleg) if deleg.from_glob) {
             let impl_def_id = self.r.r.tcx.local_parent(local_def_id);
             let key = BindingKey::new(item.ident.normalize_to_macros_2_0(), ns);
-            self.r.r.impl_binding_keys.entry(impl_def_id).or_default().insert(key);
+            self.r.impl_binding_keys.entry(impl_def_id).or_default().insert(key);
         }
 
         visit::walk_assoc_item(self, item, ctxt);

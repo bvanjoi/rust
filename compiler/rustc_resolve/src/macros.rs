@@ -209,7 +209,7 @@ impl<'a, 'tcx> ResolverExpand for ExpandResolver<'a, 'tcx> {
 
         parent_scope.module.unexpanded_invocations.borrow_mut().remove(&expansion);
         if let Some(unexpanded_invocations) =
-            self.r.impl_unexpanded_invocations.get_mut(&self.invocation_parent(expansion))
+            self.impl_unexpanded_invocations.get_mut(&self.invocation_parent(expansion))
         {
             unexpanded_invocations.remove(&expansion);
         }
@@ -342,7 +342,7 @@ impl<'a, 'tcx> ResolverExpand for ExpandResolver<'a, 'tcx> {
 
     fn record_macro_rule_usage(&mut self, id: NodeId, rule_i: usize) {
         let did = self.r.local_def_id(id);
-        self.r.unused_macro_rules.remove(&(did, rule_i));
+        self.unused_macro_rules.remove(&(did, rule_i));
     }
 
     fn check_unused_macros(&mut self) {
@@ -354,7 +354,7 @@ impl<'a, 'tcx> ResolverExpand for ExpandResolver<'a, 'tcx> {
                 BuiltinLintDiag::UnusedMacroDefinition(ident.name),
             );
         }
-        for (&(def_id, arm_i), &(ident, rule_span)) in self.r.unused_macro_rules.iter() {
+        for (&(def_id, arm_i), &(ident, rule_span)) in self.unused_macro_rules.iter() {
             if self.r.unused_macros.contains_key(&def_id) {
                 // We already lint the entire macro as unused
                 continue;
@@ -386,7 +386,7 @@ impl<'a, 'tcx> ResolverExpand for ExpandResolver<'a, 'tcx> {
         //   than by individual derives.
         // - Derives in the container need to know whether one of them is a built-in `Copy`.
         // Temporarily take the data to avoid borrow checker conflicts.
-        let mut derive_data = mem::take(&mut self.r.derive_data);
+        let mut derive_data = mem::take(&mut self.derive_data);
         let entry = derive_data.entry(expn_id).or_insert_with(|| DeriveData {
             resolutions: derive_paths(),
             helper_attrs: Vec::new(),
@@ -419,8 +419,8 @@ impl<'a, 'tcx> ResolverExpand for ExpandResolver<'a, 'tcx> {
                         }
                         Ok(_) | Err(Determinacy::Determined) => self.r.dummy_ext(MacroKind::Derive),
                         Err(Determinacy::Undetermined) => {
-                            assert!(self.r.derive_data.is_empty());
-                            self.r.derive_data = derive_data;
+                            assert!(self.derive_data.is_empty());
+                            self.derive_data = derive_data;
                             return Err(Indeterminate);
                         }
                     },
@@ -445,13 +445,13 @@ impl<'a, 'tcx> ResolverExpand for ExpandResolver<'a, 'tcx> {
         if entry.has_derive_copy || self.has_derive_copy(parent_scope.expansion) {
             self.containers_deriving_copy.insert(expn_id);
         }
-        assert!(self.r.derive_data.is_empty());
-        self.r.derive_data = derive_data;
+        assert!(self.derive_data.is_empty());
+        self.derive_data = derive_data;
         Ok(())
     }
 
     fn take_derive_resolutions(&mut self, expn_id: LocalExpnId) -> Option<Vec<DeriveResolution>> {
-        self.r.derive_data.remove(&expn_id).map(|data| data.resolutions)
+        self.derive_data.remove(&expn_id).map(|data| data.resolutions)
     }
 
     // The function that implements the resolution logic of `#[cfg_accessible(path)]`.
@@ -491,7 +491,7 @@ impl<'a, 'tcx> ResolverExpand for ExpandResolver<'a, 'tcx> {
     }
 
     fn register_glob_delegation(&mut self, invoc_id: LocalExpnId) {
-        self.r.glob_delegation_invoc_ids.insert(invoc_id);
+        self.glob_delegation_invoc_ids.insert(invoc_id);
     }
 
     fn glob_delegation_suffixes(
@@ -509,16 +509,16 @@ impl<'a, 'tcx> ResolverExpand for ExpandResolver<'a, 'tcx> {
         // less hacky.
         // Cons: More code is generated just to be deleted later, deleting already created `DefId`s
         // may be nontrivial.
-        if let Some(unexpanded_invocations) = self.r.impl_unexpanded_invocations.get(&impl_def_id)
+        if let Some(unexpanded_invocations) = self.impl_unexpanded_invocations.get(&impl_def_id)
             && !unexpanded_invocations.is_empty()
         {
             return Err(Indeterminate);
         }
 
         let mut idents = Vec::new();
-        target_trait.for_each_child(&mut self.r, |this, ident, ns, _binding| {
+        target_trait.for_each_child(&mut self.r, |_, ident, ns, _binding| {
             // FIXME: Adjust hygiene for idents from globs, like for glob imports.
-            if let Some(overriding_keys) = this.impl_binding_keys.get(&impl_def_id)
+            if let Some(overriding_keys) = self.impl_binding_keys.get(&impl_def_id)
                 && overriding_keys.contains(&BindingKey::new(ident.normalize_to_macros_2_0(), ns))
             {
                 // The name is overridden, do not produce it from the glob delegation.
